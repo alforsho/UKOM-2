@@ -6,6 +6,12 @@ use App\Http\Controllers\BukuController;
 use App\Http\Controllers\AnggotaController;
 use App\Http\Controllers\TransaksiController;
 
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+*/
+
 // --- 1. PUBLIK (Akses Sebelum Login) ---
 Route::get('/', function () {
     return redirect('/login');
@@ -31,13 +37,13 @@ Route::middleware('auth')->group(function () {
     });
 
     // --- FITUR TRANSAKSI (Prefix Group) ---
-    // Sekarang Edit & Delete diletakkan di sini agar bisa diakses Admin maupun Siswa
     Route::prefix('transaksi')->group(function () {
-        Route::get('/', [TransaksiController::class, 'index']);           // Lihat Data
-        Route::post('/store', [TransaksiController::class, 'store']);     // Pinjam Buku
-        Route::get('/edit/{id}', [TransaksiController::class, 'edit']);   // Form Edit
+        Route::get('/', [TransaksiController::class, 'index']);             // Lihat Semua Data
+        Route::get('/show/{id}', [TransaksiController::class, 'show']);      // DETAIL TRANSAKSI (Baru)
+        Route::post('/store', [TransaksiController::class, 'store']);       // Pinjam Buku
+        Route::get('/edit/{id}', [TransaksiController::class, 'edit']);     // Form Edit
         Route::post('/update/{id}', [TransaksiController::class, 'update']); // Proses Update
-        Route::get('/delete/{id}', [TransaksiController::class, 'destroy']); // Hapus Data (Siswa & Admin)
+        Route::get('/delete/{id}', [TransaksiController::class, 'destroy']); // Hapus Data
         Route::get('/kembali/{id}', [TransaksiController::class, 'kembali']); // Pengembalian
     });
 
@@ -67,6 +73,8 @@ Route::middleware('auth')->group(function () {
         Route::prefix('admin/anggota')->group(function () {
             Route::get('/', [AnggotaController::class, 'index']);
             Route::post('/store', [AnggotaController::class, 'store']);
+            Route::get('/edit/{id}', [AnggotaController::class, 'edit']); // Form Edit Anggota
+            Route::post('/update/{id}', [AnggotaController::class, 'update']); 
             Route::get('/delete/{id}', [AnggotaController::class, 'destroy']);
         });
     });

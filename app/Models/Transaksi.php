@@ -11,11 +11,20 @@ class Transaksi extends Model
 
     protected $table = 'transaksi';
     protected $primaryKey = 'id_transaksi';
-    protected $fillable = ['user_id', 'id_buku', 'tanggal_trs', 'status'];
+
+    // Update bagian fillable sesuai dengan nama kolom baru di database
+    protected $fillable = [
+        'id', // Sesuai screenshot, kolom user menggunakan 'id' bukan 'user_id'
+        'id_buku', 
+        'tanggal_peminjaman', // Nama baru
+        'tanggal_pengembalian', // Kolom tambahan baru
+        'status'
+    ];
 
     public function user()
     {
-        return $this->belongsTo(User::class, 'user_id', 'id');
+        // Berdasarkan gambar phpMyAdmin Anda, kolom foreign key adalah 'id'
+        return $this->belongsTo(User::class, 'id', 'id');
     }
 
     public function buku()

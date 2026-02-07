@@ -8,35 +8,47 @@ use Carbon\Carbon;
 
 class TransaksiController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $user = auth()->user();
         $bukus = DB::table('buku')->where('stok', '>', 0)->get();
-        
-        // Konfigurasi Denda
+        $list_anggota = DB::table('users')->where('role', 'siswa')->get();
+
         $harga_denda_per_hari = 1000; 
-        $batas_hari_pinjam = 7;
 
         $query = DB::table('transaksi')
             ->join('buku', 'transaksi.id_buku', '=', 'buku.id_buku')
-            ->select('transaksi.*', 'buku.nama_buku')
+            ->join('users', 'transaksi.id', '=', 'users.id')
+            ->select('transaksi.*', 'buku.nama_buku', 'users.nama') 
             ->orderBy('transaksi.id_transaksi', 'desc');
 
+        // Filter Search
+        if ($request->has('search')) {
+            $search = $request->get('search');
+            $query->where(function($q) use ($search) {
+                $q->where('users.nama', 'like', "%$search%")
+                  ->orWhere('buku.nama_buku', 'like', "%$search%");
+            });
+        }
+
+        // Filter Tanggal
+        if ($request->filled('tanggal')) {
+            $query->whereDate('transaksi.tanggal_peminjaman', $request->get('tanggal'));
+        }
+
+        // Admin vs Siswa
         if ($user->role == 'admin') {
-            $transaksis = $query->join('users', 'transaksi.id', '=', 'users.id')
-                ->addSelect('users.nama')
-                ->get();
+            $transaksis = $query->get();
         } else {
             $transaksis = $query->where('transaksi.id', $user->id)->get();
         }
 
-        // LOGIKA HITUNG DENDA OTOMATIS (Berjalan di memori untuk tampilan)
+        // Kalkulasi Denda
         foreach ($transaksis as $t) {
-            $tgl_pinjam = Carbon::parse($t->tanggal_trs);
-            $tgl_deadline = $tgl_pinjam->copy()->addDays($batas_hari_pinjam);
+            $tgl_deadline = Carbon::parse($t->tanggal_pengembalian);
             $tgl_sekarang = Carbon::now();
 
-            if ($t->status == 'Pinjam' && $tgl_sekarang->gt($tgl_deadline)) {
+            if ($t->status == 'Dipinjam' && $tgl_sekarang->gt($tgl_deadline)) {
                 $selisih_hari = $tgl_sekarang->diffInDays($tgl_deadline);
                 $t->total_denda = $selisih_hari * $harga_denda_per_hari;
             } else {
@@ -45,23 +57,55 @@ class TransaksiController extends Controller
         }
 
         if ($user->role == 'admin') {
-            return view('transaksi.admin', compact('transaksis', 'bukus'));
+            return view('transaksi.admin', compact('transaksis', 'bukus', 'list_anggota'));
         } else {
             return view('transaksi.siswa', compact('transaksis', 'bukus'));
         }
+    }
+
+    public function show($id)
+    {
+        $transaksi = DB::table('transaksi')
+            ->join('buku', 'transaksi.id_buku', '=', 'buku.id_buku')
+            ->join('users', 'transaksi.id', '=', 'users.id')
+            ->select(
+                'transaksi.*', 
+                'buku.nama_buku', 
+                'buku.penerbit', 
+                'users.nama'
+            )
+            ->where('transaksi.id_transaksi', $id)
+            ->first();
+
+        if (!$transaksi) {
+            return back()->with('error', 'Data tidak ditemukan.');
+        }
+
+        $tgl_deadline = Carbon::parse($transaksi->tanggal_pengembalian);
+        $tgl_sekarang = Carbon::now();
+        $harga_denda_per_hari = 1000;
+
+        if ($transaksi->status == 'Dipinjam' && $tgl_sekarang->gt($tgl_deadline)) {
+            $selisih_hari = $tgl_sekarang->diffInDays($tgl_deadline);
+            $transaksi->total_denda = $selisih_hari * $harga_denda_per_hari;
+            $transaksi->hari_terlambat = $selisih_hari;
+        } else {
+            $transaksi->total_denda = 0;
+            $transaksi->hari_terlambat = 0;
+        }
+
+        return view('transaksi.detail', compact('transaksi'));
     }
 
     public function store(Request $request)
     {
         $userId = auth()->user()->role == 'admin' ? $request->user_id : auth()->id();
 
-        // FILTER 1: Batas Maksimal Pinjam 3 Buku
-        $cekPinjam = DB::table('transaksi')->where('id', $userId)->where('status', 'Pinjam')->count();
+        $cekPinjam = DB::table('transaksi')->where('id', $userId)->where('status', 'Dipinjam')->count();
         if ($cekPinjam >= 3) {
-            return back()->with('error', 'Gagal! Kamu masih meminjam 3 buku. Balikin dulu ya.');
+            return back()->with('error', 'Gagal! Siswa ini masih meminjam 3 buku.');
         }
 
-        // FILTER 2: Cek Stok Buku
         $buku = DB::table('buku')->where('id_buku', $request->id_buku)->first();
         if (!$buku || $buku->stok <= 0) {
             return back()->with('error', 'Maaf, stok buku ini sudah habis!');
@@ -71,84 +115,60 @@ class TransaksiController extends Controller
             DB::table('transaksi')->insert([
                 'id' => $userId,
                 'id_buku' => $request->id_buku,
-                'tanggal_trs' => now(),
-                'status' => 'Pinjam',
+                'tanggal_peminjaman' => now(),
+                'tanggal_pengembalian' => now()->addDays(7),
+                'status' => 'Dipinjam',
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
             DB::table('buku')->where('id_buku', $request->id_buku)->decrement('stok');
         });
 
-        return back()->with('success', 'Buku berhasil dipinjam! Batas waktu 7 hari.');
+        return back()->with('success', 'Peminjaman berhasil dicatat!');
     }
 
     public function edit($id)
     {
         $transaksi = DB::table('transaksi')->where('id_transaksi', $id)->first();
-        
-        // Keamanan: Siswa dilarang ngintip/edit punya orang lain lewat URL
-        if (auth()->user()->role == 'siswa' && $transaksi->id != auth()->id()) {
-            return redirect('/transaksi')->with('error', 'Akses dilarang!');
-        }
-
         $bukus = DB::table('buku')->get();
-        return view('transaksi.edit', compact('transaksi', 'bukus'));
+        $list_anggota = DB::table('users')->where('role', 'siswa')->get();
+        return view('transaksi.edit', compact('transaksi', 'bukus', 'list_anggota'));
     }
 
     public function update(Request $request, $id)
     {
-        $transaksi = DB::table('transaksi')->where('id_transaksi', $id)->first();
-        
-        // Hanya admin yang boleh ganti user_id dan status di form edit
-        $userId = auth()->user()->role == 'admin' ? $request->user_id : auth()->id();
-        $status = auth()->user()->role == 'admin' ? $request->status : $transaksi->status;
-
         DB::table('transaksi')->where('id_transaksi', $id)->update([
-            'id' => $userId,
+            'id' => $request->user_id,
             'id_buku' => $request->id_buku,
-            'status' => $status,
+            'status' => $request->status,
             'updated_at' => now(),
         ]);
-
-        return redirect('/transaksi')->with('success', 'Data transaksi berhasil diperbarui!');
+        return redirect('/transaksi')->with('success', 'Transaksi diperbarui!');
     }
 
     public function kembali($id)
     {
         $tr = DB::table('transaksi')->where('id_transaksi', $id)->first();
-        
-        if ($tr && $tr->status == 'Pinjam') {
+        if ($tr && $tr->status == 'Dipinjam') {
             DB::transaction(function () use ($tr, $id) {
                 DB::table('transaksi')->where('id_transaksi', $id)->update([
-                    'status' => 'Kembali', 
+                    'status' => 'Dikembalikan',
                     'updated_at' => now()
                 ]);
                 DB::table('buku')->where('id_buku', $tr->id_buku)->increment('stok');
             });
-            return back()->with('success', 'Buku telah dikembalikan. Stok buku otomatis bertambah!');
+            return back()->with('success', 'Buku telah dikembalikan.');
         }
-        return back()->with('error', 'Buku ini sudah dikembalikan sebelumnya.');
+        return back()->with('error', 'Buku sudah dikembalikan.');
     }
 
     public function destroy($id)
     {
         $transaksi = DB::table('transaksi')->where('id_transaksi', $id)->first();
-
-        if (!$transaksi) {
-            return back()->with('error', 'Data tidak ditemukan.');
+        if ($transaksi && $transaksi->status == 'Dipinjam') {
+            return back()->with('error', 'Buku masih dipinjam!');
         }
-
-        // FILTER 3: Keamanan Data & Stok
-        if ($transaksi->status == 'Pinjam') {
-            return back()->with('error', 'Dilarang menghapus! Buku masih dipinjam. Selesaikan dulu pengembaliannya.');
-        }
-
-        // Keamanan: Siswa dilarang hapus riwayat orang lain
-        if (auth()->user()->role == 'siswa' && $transaksi->id != auth()->id()) {
-            return redirect('/transaksi')->with('error', 'Akses dilarang!');
-        }
-
         DB::table('transaksi')->where('id_transaksi', $id)->delete();
-        return back()->with('success', 'Riwayat transaksi telah dihapus.');
+        return back()->with('success', 'Data dihapus.');
     }
 }
